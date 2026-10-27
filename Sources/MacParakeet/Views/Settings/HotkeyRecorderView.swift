@@ -4,7 +4,7 @@ import SwiftUI
 
 /// "Record a shortcut" UI for hotkey selection.
 /// Normal state:    [ fn Fn              Change... ]
-/// Recording state: [ Press any key...   Cancel    ]  (highlighted border)
+/// Recording state: [ Press a key or mouse button...   Cancel ] (highlighted border)
 /// With warning:    [ Space              Change... ]
 ///                    Warning text shown below.
 struct HotkeyRecorderView: View {
@@ -33,6 +33,9 @@ struct HotkeyRecorderView: View {
     @State private var pendingModifierComponents: [HotkeyTrigger.ModifierComponent] = []
     @State private var candidateModifierComponents: [HotkeyTrigger.ModifierComponent] = []
     @State private var modifierCaptureMode: ModifierCaptureMode = .standard
+    @State private var pendingMouseButton: Int?
+    @State private var pendingMouseTrigger: HotkeyTrigger?
+    @State private var pendingMouseWarning: String?
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
@@ -117,7 +120,7 @@ struct HotkeyRecorderView: View {
     private var recordingView: some View {
         HStack(spacing: 8) {
             if pendingModifierComponents.isEmpty {
-                Text("Press a key or shortcut...")
+                Text("Press a key or mouse button...")
                     .font(DesignSystem.Typography.body)
                     .foregroundStyle(.secondary)
             } else {
@@ -158,7 +161,10 @@ struct HotkeyRecorderView: View {
 
     private func startRecording(modifierCaptureMode: ModifierCaptureMode = .standard) {
         // Guard against double-start leaking the existing monitor
-        if eventMonitor != nil { stopRecording() }
+        if eventMonitor != nil {
+            stopRecording()
+            guard eventMonitor == nil else { return }
+        }
 
         isRecording = true
         validationMessage = nil
@@ -172,7 +178,57 @@ struct HotkeyRecorderView: View {
         // keyDown we're trying to capture.
         onRecordingStateChanged?(true)
 
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [self] event in
+        eventMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.keyDown, .flagsChanged, .otherMouseDown, .otherMouseUp, .otherMouseDragged]
+        ) { [self] event in
+            if let button = pendingMouseButton {
+                if event.type == .otherMouseUp, event.buttonNumber == button {
+                    pendingMouseButton = nil
+                    if let candidate = pendingMouseTrigger {
+                        acceptTrigger(candidate, warning: pendingMouseWarning)
+                    } else {
+                        stopRecording()
+                    }
+                    return nil
+                }
+                if event.type == .keyDown, event.keyCode == 53 {
+                    stopRecording()
+                    return nil
+                }
+                if (event.type == .otherMouseDown || event.type == .otherMouseDragged),
+                   event.buttonNumber == button {
+                    return nil
+                }
+                // Never turn a rejected modifier+mouse chord into a modifier-only shortcut.
+                return event.type == .keyDown ? nil : event
+            }
+            if event.type == .otherMouseDown {
+                guard (2...31).contains(event.buttonNumber) else { return event }
+                pendingMouseButton = event.buttonNumber
+                pendingModifierComponents = []
+                candidateModifierComponents = []
+                guard let candidate = Self.mouseButtonTrigger(
+                    buttonNumber: event.buttonNumber,
+                    flags: event.modifierFlags
+                ) else {
+                    validationMessage = "Mouse shortcuts do not support modifier keys."
+                    validationIsBlocked = true
+                    return nil
+                }
+                switch combinedValidation(for: candidate) {
+                case .blocked(let message):
+                    validationMessage = message
+                    validationIsBlocked = true
+                case .warned(let message):
+                    pendingMouseTrigger = candidate
+                    pendingMouseWarning = message
+                case .allowed:
+                    pendingMouseTrigger = candidate
+                }
+                // Keep the monitor (and tap suspension) until release so the
+                // captured click cannot leak an unmatched up or drag into UI.
+                return nil
+            }
             if event.type == .keyDown {
                 let keyCode = event.keyCode
 
@@ -311,6 +367,16 @@ struct HotkeyRecorderView: View {
             }
             return event
         }
+    }
+
+    static func mouseButtonTrigger(
+        buttonNumber: Int,
+        flags: NSEvent.ModifierFlags
+    ) -> HotkeyTrigger? {
+        let modifiers: NSEvent.ModifierFlags = [.command, .control, .option, .shift, .function]
+        guard (2...31).contains(buttonNumber),
+              flags.intersection(modifiers).isEmpty else { return nil }
+        return .mouseButton(UInt16(buttonNumber))
     }
 
     /// Extract chord-eligible modifier names from NSEvent modifier flags.
@@ -473,6 +539,13 @@ struct HotkeyRecorderView: View {
     }
 
     private func stopRecording() {
+        // A consumed mouse-down owns its drag/up even if Cancel or
+        // onDisappear discards the candidate. Resume taps only after release.
+        if pendingMouseButton != nil {
+            pendingMouseTrigger = nil
+            pendingMouseWarning = nil
+            return
+        }
         // Tracking against `isRecording` (the canonical UI state) keeps the
         // (true)/(false) pair balanced even if `addLocalMonitorForEvents`
         // returns nil — the start callback fired before the monitor was
@@ -484,6 +557,9 @@ struct HotkeyRecorderView: View {
         pendingModifierComponents = []
         candidateModifierComponents = []
         modifierCaptureMode = .standard
+        pendingMouseButton = nil
+        pendingMouseTrigger = nil
+        pendingMouseWarning = nil
         if let monitor = eventMonitor {
             NSEvent.removeMonitor(monitor)
             eventMonitor = nil

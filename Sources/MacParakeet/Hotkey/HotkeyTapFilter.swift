@@ -20,7 +20,16 @@ struct HotkeyTapFilter {
     }
 
     /// `flags` are the event's raw flags; only the chord modifier bits matter.
-    mutating func shouldSwallow(type: CGEventType, keyCode: UInt16, flags: UInt64) -> Bool {
+    mutating func shouldSwallow(
+        type: CGEventType,
+        keyCode: UInt16,
+        flags: UInt64,
+        mouseButtonNumber: UInt16? = nil
+    ) -> Bool {
+        if trigger.kind == .mouseButton {
+            guard let button = trigger.mouseButtonNumber, mouseButtonNumber == button else { return false }
+            return type == .otherMouseDown || type == .otherMouseUp || type == .otherMouseDragged
+        }
         guard let triggerCode = trigger.keyCode, keyCode == triggerCode else { return false }
         switch trigger.kind {
         case .keyCode:
@@ -56,7 +65,7 @@ struct HotkeyTapFilter {
             default:
                 return false
             }
-        case .modifier, .modifierChord, .disabled:
+        case .modifier, .modifierChord, .disabled, .mouseButton:
             return false
         }
     }

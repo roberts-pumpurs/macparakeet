@@ -56,7 +56,7 @@ enum SettingsDictationHotkeyDisplay {
                 return "Fn"
             }
             return trigger.shortSymbol
-        case .keyCode, .chord, .modifierChord:
+        case .keyCode, .chord, .modifierChord, .mouseButton:
             return trigger.shortSymbol
         }
     }

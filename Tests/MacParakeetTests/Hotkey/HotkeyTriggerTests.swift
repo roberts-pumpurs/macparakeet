@@ -116,6 +116,143 @@ final class HotkeyTriggerTests: XCTestCase {
         XCTAssertEqual(trigger.shortSymbol, "Key 200")
     }
 
+    // MARK: - Mouse Buttons
+
+    func testMouseButtonUsesDedicatedIdentityAndLabel() {
+        let trigger = HotkeyTrigger.mouseButton(3)
+        XCTAssertEqual(trigger.kind, .mouseButton)
+        XCTAssertEqual(trigger.mouseButtonNumber, 3)
+        XCTAssertNil(trigger.keyCode)
+        XCTAssertNil(trigger.modifierName)
+        XCTAssertNil(trigger.chordModifiers)
+        XCTAssertNil(trigger.modifierKeyCode)
+        XCTAssertNil(trigger.modifierChordComponents)
+        XCTAssertFalse(trigger.isDisabled)
+        XCTAssertEqual(trigger.displayName, "Mouse 4")
+        XCTAssertEqual(trigger.shortSymbol, "Mouse 4")
+        XCTAssertEqual(trigger.formattedLabel, "Mouse 4")
+        XCTAssertEqual(trigger.validation, .allowed)
+        XCTAssertEqual(trigger.telemetryKind, .mouseButton)
+        XCTAssertEqual(trigger.telemetryKind.rawValue, "mouse_button")
+    }
+
+    func testMouseButtonCodableRoundtripUsesDedicatedNumber() throws {
+        let trigger = HotkeyTrigger.mouseButton(3)
+        let data = try JSONEncoder().encode(trigger)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(object["kind"] as? String, "mouseButton")
+        XCTAssertEqual(object["mouseButtonNumber"] as? Int, 3)
+        XCTAssertNil(object["keyCode"])
+        XCTAssertNil(object["chordModifiers"])
+        XCTAssertEqual(try JSONDecoder().decode(HotkeyTrigger.self, from: data), trigger)
+    }
+
+    func testMouseButtonPersistenceAcrossShortcutRoles() {
+        let keys = [
+            HotkeyTrigger.defaultsKey,
+            HotkeyTrigger.pushToTalkDefaultsKey,
+            HotkeyTrigger.meetingDefaultsKey,
+            HotkeyTrigger.fileTranscriptionDefaultsKey,
+            HotkeyTrigger.youtubeTranscriptionDefaultsKey,
+            HotkeyTrigger.dictationAIPolishDefaultsKey,
+            HotkeyTrigger.alternateHandsFreeDefaultsKey,
+            HotkeyTrigger.alternatePushToTalkDefaultsKey,
+        ]
+        for key in keys {
+            HotkeyTrigger.mouseButton(3).save(to: testDefaults, defaultsKey: key)
+            let loaded = HotkeyTrigger.current(defaults: testDefaults, defaultsKey: key)
+            XCTAssertEqual(loaded, .mouseButton(3), key)
+            XCTAssertEqual(loaded.displayName, "Mouse 4", key)
+        }
+    }
+
+    func testMouseButtonValidationAcceptsOnlyOtherMouseRange() {
+        for number in [UInt16(2), 3, 31] {
+            XCTAssertEqual(HotkeyTrigger.mouseButton(number).validation, .allowed)
+        }
+        XCTAssertEqual(HotkeyTrigger.mouseButton(2).displayName, "Mouse 3")
+        XCTAssertEqual(HotkeyTrigger.mouseButton(31).displayName, "Mouse 32")
+        for number in [UInt16(0), 1, 32, UInt16.max] {
+            let trigger = HotkeyTrigger.mouseButton(number)
+            guard case .blocked = trigger.validation else {
+                XCTFail("Mouse button \(number) must not be assignable")
+                continue
+            }
+            XCTAssertThrowsError(try JSONEncoder().encode(trigger))
+        }
+    }
+
+    func testMalformedMouseConfigurationsCannotDecodeOrLoad() {
+        let invalidJSON = [
+            #"{"kind":"mouseButton"}"#,
+            #"{"kind":"mouseButton","mouseButtonNumber":null}"#,
+            #"{"kind":"mouseButton","mouseButtonNumber":0}"#,
+            #"{"kind":"mouseButton","mouseButtonNumber":1}"#,
+            #"{"kind":"mouseButton","mouseButtonNumber":32}"#,
+            #"{"kind":"mouseButton","mouseButtonNumber":-1}"#,
+            #"{"kind":"mouseButton","mouseButtonNumber":65536}"#,
+            #"{"kind":"mouseButton","keyCode":3}"#,
+            #"{"kind":"mouseButton","mouseButtonNumber":3,"keyCode":3}"#,
+            #"{"kind":"mouseButton","mouseButtonNumber":3,"modifierName":"command"}"#,
+            #"{"kind":"mouseButton","mouseButtonNumber":3,"chordModifiers":["command"]}"#,
+            #"{"kind":"mouseButton","mouseButtonNumber":3,"modifierKeyCode":55}"#,
+            #"{"kind":"mouseButton","mouseButtonNumber":3,"modifierChordComponents":[{"modifierName":"command"}]}"#,
+        ]
+        for json in invalidJSON {
+            let data = Data(json.utf8)
+            XCTAssertThrowsError(try JSONDecoder().decode(HotkeyTrigger.self, from: data), json)
+            testDefaults.set(data, forKey: HotkeyTrigger.defaultsKey)
+            XCTAssertEqual(
+                HotkeyTrigger.current(defaults: testDefaults, fallback: .disabled),
+                .disabled,
+                json
+            )
+        }
+    }
+
+    func testInvalidMouseSaveDoesNotReplaceExistingShortcut() {
+        HotkeyTrigger.mouseButton(3).save(to: testDefaults)
+        HotkeyTrigger.mouseButton(0).save(to: testDefaults)
+        XCTAssertEqual(HotkeyTrigger.current(defaults: testDefaults), .mouseButton(3))
+    }
+
+    func testMouseButtonConflictIdentityIsSeparateFromKeyboard() {
+        let mouse = HotkeyTrigger.mouseButton(3)
+        XCTAssertEqual(mouse, .mouseButton(3))
+        XCTAssertNotEqual(mouse, .mouseButton(4))
+        XCTAssertNotEqual(mouse, .fromKeyCode(3))
+        XCTAssertEqual(Set([mouse, .mouseButton(3), .mouseButton(4), .fromKeyCode(3)]).count, 3)
+        XCTAssertTrue(mouse.overlaps(with: .mouseButton(3)))
+        XCTAssertTrue(mouse.conflicts(with: .mouseButton(3)))
+        XCTAssertTrue(mouse.conflicts(with: .mouseButton(3), selfMode: .bareModifierDictation))
+        for other in [
+            HotkeyTrigger.mouseButton(4), .fromKeyCode(3), .chord(modifiers: ["command"], keyCode: 3),
+            .command, .modifierChord(modifiers: ["command", "shift"]), .disabled,
+        ] {
+            XCTAssertFalse(mouse.overlaps(with: other), other.displayName)
+            XCTAssertFalse(other.overlaps(with: mouse), other.displayName)
+            XCTAssertFalse(mouse.conflicts(with: other), other.displayName)
+            XCTAssertFalse(other.conflicts(with: mouse), other.displayName)
+        }
+    }
+
+    func testExistingKeyboardJSONDecodesWithoutMouseIdentity() throws {
+        let cases: [(String, HotkeyTrigger)] = [
+            (#"{"kind":"disabled"}"#, .disabled),
+            (#"{"kind":"modifier","modifierName":"fn"}"#, .fn),
+            (#"{"kind":"keyCode","keyCode":3}"#, .fromKeyCode(3)),
+            (#"{"kind":"chord","keyCode":3,"chordModifiers":["command"]}"#,
+             .chord(modifiers: ["command"], keyCode: 3)),
+            (#"{"kind":"modifierChord","modifierChordComponents":[{"modifierName":"command"},{"modifierName":"shift"}]}"#,
+             .modifierChord(modifiers: ["command", "shift"])),
+        ]
+        for (json, expected) in cases {
+            let decoded = try JSONDecoder().decode(HotkeyTrigger.self, from: Data(json.utf8))
+            XCTAssertEqual(decoded, expected)
+            XCTAssertNil(decoded.mouseButtonNumber)
+        }
+    }
+
     // MARK: - formattedLabel
 
     func testFormattedLabelDisabled() {

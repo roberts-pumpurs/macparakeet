@@ -10,6 +10,68 @@ final class GlobalShortcutManagerTests: XCTestCase {
     private let leftCommandMask = UInt64(NX_DEVICELCMDKEYMASK)
     private let rightCommandMask = UInt64(NX_DEVICERCMDKEYMASK)
 
+    private func mouseEvent(button: Int64) throws -> CGEvent {
+        return try XCTUnwrap(CGEvent(
+            mouseEventSource: nil,
+            mouseType: .otherMouseDown,
+            mouseCursorPosition: .zero,
+            mouseButton: try XCTUnwrap(CGMouseButton(rawValue: UInt32(button)))
+        ))
+    }
+
+    func testMouseShortcutMatchesOnlyConfiguredButtonAndSwallowsReleaseAndDrag() throws {
+        let manager = GlobalShortcutManager(trigger: .mouseButton(3))
+        var count = 0
+        manager.onTrigger = { count += 1 }
+        let mouse4 = try mouseEvent(button: 3)
+        let mouse5 = try mouseEvent(button: 4)
+        for type: CGEventType in [.otherMouseDown, .otherMouseDragged, .otherMouseUp] {
+            XCTAssertFalse(manager.handleEventForTesting(type: type, event: mouse5))
+        }
+        XCTAssertEqual(count, 0)
+        XCTAssertTrue(manager.handleEventForTesting(type: .otherMouseDown, event: mouse4))
+        XCTAssertTrue(manager.handleEventForTesting(type: .otherMouseDown, event: mouse4))
+        XCTAssertTrue(manager.handleEventForTesting(type: .otherMouseDragged, event: mouse4))
+        XCTAssertTrue(manager.handleEventForTesting(type: .otherMouseUp, event: mouse4))
+        XCTAssertEqual(count, 1)
+        XCTAssertTrue(manager.handleEventForTesting(type: .otherMouseDown, event: mouse4))
+        XCTAssertEqual(count, 2)
+    }
+
+    func testMouseShortcutDoesNotConsumeKeyboardOrPrimaryMouseEvents() throws {
+        let manager = GlobalShortcutManager(trigger: .mouseButton(3))
+        var count = 0
+        manager.onTrigger = { count += 1 }
+        let event = try mouseEvent(button: 3)
+        event.setIntegerValueField(.keyboardEventKeycode, value: 3)
+        for type: CGEventType in [.keyDown, .keyUp, .flagsChanged, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp] {
+            XCTAssertFalse(manager.handleEventForTesting(type: type, event: event))
+        }
+        XCTAssertEqual(count, 0)
+        let keyboardManager = GlobalShortcutManager(trigger: .fromKeyCode(3))
+        keyboardManager.onTrigger = { count += 1 }
+        for type: CGEventType in [.otherMouseDown, .otherMouseDragged, .otherMouseUp] {
+            XCTAssertFalse(keyboardManager.handleEventForTesting(type: type, event: event))
+        }
+        XCTAssertEqual(count, 0)
+    }
+
+    func testMouseTapRecoveryResynchronizesHeldButton() throws {
+        let manager = GlobalShortcutManager(trigger: .mouseButton(3))
+        let event = try mouseEvent(button: 3)
+        var count = 0
+        manager.onTrigger = { count += 1 }
+        manager.recoverFromDisabledTapForTesting(triggerKeyPressed: true)
+        XCTAssertTrue(manager.handleEventForTesting(type: .otherMouseDown, event: event))
+        XCTAssertEqual(count, 0)
+        XCTAssertTrue(manager.handleEventForTesting(type: .otherMouseUp, event: event))
+        XCTAssertTrue(manager.handleEventForTesting(type: .otherMouseDown, event: event))
+        XCTAssertEqual(count, 1)
+        manager.recoverFromDisabledTapForTesting(triggerKeyPressed: false)
+        XCTAssertTrue(manager.handleEventForTesting(type: .otherMouseDown, event: event))
+        XCTAssertEqual(count, 2)
+    }
+
     /// Needs Input Monitoring / Accessibility; skipped where tap creation is
     /// denied (CI). Guards the #1132 leak against the real tap registry.
     func testStartStopCyclesDoNotAccumulateEventTaps() throws {

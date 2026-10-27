@@ -8,6 +8,19 @@ import XCTest
 final class HotkeyTapFilterTests: XCTestCase {
     private let chord = HotkeyTrigger.chord(modifiers: ["control", "shift"], keyCode: 15)
 
+    func testMouseButtonConsumesItsClickAndDragButNeverKeyboardOrOtherButtons() {
+        var mouse = HotkeyTapFilter(trigger: .mouseButton(3))
+        var keyboard = HotkeyTapFilter(trigger: .fromKeyCode(3))
+        for type in [CGEventType.otherMouseDown, .otherMouseUp, .otherMouseDragged] {
+            XCTAssertTrue(mouse.shouldSwallow(type: type, keyCode: 0, flags: 0, mouseButtonNumber: 3))
+            XCTAssertFalse(mouse.shouldSwallow(type: type, keyCode: 3, flags: 0, mouseButtonNumber: 4))
+            XCTAssertFalse(keyboard.shouldSwallow(type: type, keyCode: 3, flags: 0, mouseButtonNumber: 3))
+        }
+        for type in [CGEventType.keyDown, .keyUp, .leftMouseDown, .rightMouseDown] {
+            XCTAssertFalse(mouse.shouldSwallow(type: type, keyCode: 3, flags: 0, mouseButtonNumber: 3))
+        }
+    }
+
     func testModifierTriggersNeverConsume() {
         for trigger in [HotkeyTrigger.fn, .control, .modifierChord(modifiers: ["control", "option"])] {
             var filter = HotkeyTapFilter(trigger: trigger)

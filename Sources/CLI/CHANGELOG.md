@@ -94,6 +94,13 @@ by checking exit code first: `2` = misuse, `1` = runtime, `0` = success.
 
 ## [Unreleased]
 
+### Added
+
+- Shared shortcut JSON accepts `kind: "mouseButton"` with a zero-based
+  `mouseButtonNumber`. Mouse 4 stores 3. Mouse buttons do not reserve keyboard
+  codes with the same number. Existing keyboard JSON and CLI commands do not
+  change.
+
 ### Fixed
 
 - A provider request that hits its idle timeout reports `errorType` `timeout`

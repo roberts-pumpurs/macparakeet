@@ -35,9 +35,14 @@ public final class GlobalShortcutManager {
             stop()
         }
 
-        let eventMask: CGEventMask = (1 << CGEventType.flagsChanged.rawValue)
+        var eventMask: CGEventMask = (1 << CGEventType.flagsChanged.rawValue)
             | (1 << CGEventType.keyDown.rawValue)
             | (1 << CGEventType.keyUp.rawValue)
+        if trigger.kind == .mouseButton {
+            eventMask |= (1 << CGEventType.otherMouseDown.rawValue)
+                | (1 << CGEventType.otherMouseUp.rawValue)
+                | (1 << CGEventType.otherMouseDragged.rawValue)
+        }
 
         // No tap is running yet, so this cannot race the tap thread.
         recoverFromDisabledTap()
@@ -93,7 +98,30 @@ public final class GlobalShortcutManager {
             return handleChordEvent(type: type, event: event)
         case .modifierChord:
             return handleModifierChordEvent(type: type, event: event)
+        case .mouseButton:
+            return handleMouseButtonEvent(type: type, event: event)
         }
+    }
+
+    private func handleMouseButtonEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        guard type == .otherMouseDown || type == .otherMouseUp || type == .otherMouseDragged,
+              let button = trigger.mouseButtonNumber,
+              (2...31).contains(button),
+              event.getIntegerValueField(.mouseEventButtonNumber) == Int64(button) else {
+            return Unmanaged.passUnretained(event)
+        }
+        switch type {
+        case .otherMouseDown:
+            if !triggerKeyIsPressed {
+                triggerKeyIsPressed = true
+                onTrigger?()
+            }
+        case .otherMouseUp:
+            triggerKeyIsPressed = false
+        default:
+            break
+        }
+        return nil
     }
 
     private func handleModifierEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
@@ -242,6 +270,10 @@ public final class GlobalShortcutManager {
     }
 
     private func currentPhysicalTriggerKeyIsPressed() -> Bool {
+        if trigger.kind == .mouseButton, let button = trigger.mouseButtonNumber,
+           (2...31).contains(button) {
+            return CGEventSource.buttonState(.combinedSessionState, button: CGMouseButton(rawValue: UInt32(button))!)
+        }
         guard trigger.kind == .keyCode || trigger.kind == .chord,
               let keyCode = trigger.keyCode else {
             return false
@@ -323,6 +355,11 @@ public final class GlobalShortcutManager {
             keyCode: keyCode,
             flags: flags & HotkeyTrigger.relevantModifierBits
         )
+    }
+
+    /// Returns whether the real event handler suppresses this event.
+    func handleEventForTesting(type: CGEventType, event: CGEvent) -> Bool {
+        handleEvent(type: type, event: event) == nil
     }
 
     func modifierFlagsChangedForTesting(flags: CGEventFlags, changedKeyCode: UInt16? = nil) {

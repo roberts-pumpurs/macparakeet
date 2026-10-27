@@ -29,6 +29,68 @@ final class HotkeyManagerTests: XCTestCase {
         manager.setPhysicalFlagsProviderForTesting { [] }
         return manager
     }
+    func testMouseButtonHandsFreeTogglesOnlyOnItsOwnPress() {
+        let manager = makeManager(trigger: .mouseButton(3), gestureMode: .singleTapToggle)
+        defer { manager.stop() }
+        var starts: [FnKeyStateMachine.RecordingMode] = []
+        var stops = 0
+        manager.onStartRecording = { starts.append($0) }
+        manager.onStopRecording = { stops += 1 }
+
+        manager.processForTesting(type: .keyDown, keyCode: 3, flags: [], timestampMs: 900)
+        manager.processForTesting(type: .otherMouseDown, keyCode: 0, flags: [], timestampMs: 950, mouseButtonNumber: 4)
+        XCTAssertEqual(starts, [])
+        manager.processForTesting(type: .otherMouseDown, keyCode: 0, flags: [], timestampMs: 1_000, mouseButtonNumber: 3)
+        manager.processForTesting(type: .otherMouseDown, keyCode: 0, flags: [], timestampMs: 1_010, mouseButtonNumber: 3)
+        manager.processForTesting(type: .otherMouseDragged, keyCode: 0, flags: [], timestampMs: 1_020, mouseButtonNumber: 3)
+        manager.processForTesting(type: .otherMouseUp, keyCode: 0, flags: [], timestampMs: 1_100, mouseButtonNumber: 3)
+        XCTAssertEqual(starts, [.persistent])
+        XCTAssertEqual(stops, 0)
+        manager.processForTesting(type: .otherMouseDown, keyCode: 0, flags: [], timestampMs: 1_200, mouseButtonNumber: 3)
+        manager.processForTesting(type: .otherMouseUp, keyCode: 0, flags: [], timestampMs: 1_300, mouseButtonNumber: 3)
+        XCTAssertEqual(stops, 1)
+    }
+
+    func testMouseButtonHoldIgnoresOtherButtonReleaseAndStopsOnOwnerRelease() {
+        let manager = makeManager(trigger: .mouseButton(3), gestureMode: .holdOnly)
+        defer { manager.stop() }
+        var stops = 0
+        manager.onStopRecording = { stops += 1 }
+        manager.processForTesting(type: .otherMouseDown, keyCode: 0, flags: [], timestampMs: 1_000, mouseButtonNumber: 3)
+        XCTAssertEqual(manager.startupDebounceElapsedForTesting(), [.startRecording(mode: .holdToTalk)])
+        manager.processForTesting(type: .otherMouseUp, keyCode: 0, flags: [], timestampMs: 1_200, mouseButtonNumber: 4)
+        XCTAssertEqual(stops, 0)
+        manager.processForTesting(type: .otherMouseUp, keyCode: 0, flags: [], timestampMs: 1_300, mouseButtonNumber: 3)
+        manager.processForTesting(type: .otherMouseUp, keyCode: 0, flags: [], timestampMs: 1_310, mouseButtonNumber: 3)
+        XCTAssertEqual(stops, 1)
+    }
+
+    func testMouseButtonRecoveryStopsTakeWhenReleaseWasMissed() {
+        let manager = makeManager(trigger: .mouseButton(3), gestureMode: .holdOnly)
+        defer { manager.stop() }
+        var stops = 0
+        manager.onStopRecording = { stops += 1 }
+        manager.processForTesting(type: .otherMouseDown, keyCode: 0, flags: [], timestampMs: 1_000, mouseButtonNumber: 3)
+        XCTAssertEqual(manager.startupDebounceElapsedForTesting(), [.startRecording(mode: .holdToTalk)])
+        _ = manager.recoverFromDisabledTapForTesting(flags: [], triggerKeyPressed: true, timestampMs: 1_100)
+        XCTAssertEqual(stops, 0)
+        _ = manager.recoverFromDisabledTapForTesting(flags: [], triggerKeyPressed: false, timestampMs: 1_200)
+        XCTAssertEqual(stops, 1)
+    }
+
+    func testMouseButtonEscapeCancelsAndReleaseCannotRestart() {
+        let manager = makeManager(trigger: .mouseButton(3), gestureMode: .holdOnly)
+        defer { manager.stop() }
+        var cancels = 0
+        manager.onCancelRecording = { cancels += 1 }
+        manager.processForTesting(type: .otherMouseDown, keyCode: 0, flags: [], timestampMs: 1_000, mouseButtonNumber: 3)
+        XCTAssertEqual(manager.startupDebounceElapsedForTesting(), [.startRecording(mode: .holdToTalk)])
+        manager.processForTesting(type: .keyDown, keyCode: 53, flags: [], timestampMs: 1_200)
+        manager.processForTesting(type: .otherMouseUp, keyCode: 0, flags: [], timestampMs: 1_300, mouseButtonNumber: 3)
+        XCTAssertEqual(cancels, 1)
+        XCTAssertEqual(manager.startupDebounceElapsedForTesting(), [])
+    }
+
 
     /// #1142: dictation taps, including filtering non-Fn triggers, must not
     /// share the UI run loop.

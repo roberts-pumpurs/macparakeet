@@ -4,6 +4,33 @@ import XCTest
 @testable import MacParakeetCore
 
 final class HotkeyRecorderViewTests: XCTestCase {
+    func testMouseCaptureUsesZeroBasedButtonNumber() {
+        let mouse4 = HotkeyRecorderView.mouseButtonTrigger(buttonNumber: 3, flags: [])
+        XCTAssertEqual(mouse4, .mouseButton(3))
+        XCTAssertEqual(mouse4?.mouseButtonNumber, 3)
+        XCTAssertEqual(mouse4?.kind, .mouseButton)
+        XCTAssertNil(mouse4?.keyCode)
+        XCTAssertNotEqual(mouse4, HotkeyRecorderView.mouseButtonTrigger(buttonNumber: 4, flags: []))
+    }
+
+    func testMouseCaptureLeavesPrimaryClicksUnassignable() {
+        for button in [-1, 0, 1, 32] {
+            XCTAssertNil(HotkeyRecorderView.mouseButtonTrigger(buttonNumber: button, flags: []))
+        }
+        XCTAssertEqual(HotkeyRecorderView.mouseButtonTrigger(buttonNumber: 2, flags: []), .mouseButton(2))
+        XCTAssertEqual(HotkeyRecorderView.mouseButtonTrigger(buttonNumber: 31, flags: []), .mouseButton(31))
+    }
+
+    func testMouseCaptureRejectsModifierChords() {
+        for flags: NSEvent.ModifierFlags in [.command, .control, .shift, .option, .function, [.command, .shift]] {
+            XCTAssertNil(HotkeyRecorderView.mouseButtonTrigger(buttonNumber: 3, flags: flags))
+        }
+        XCTAssertEqual(
+            HotkeyRecorderView.mouseButtonTrigger(buttonNumber: 3, flags: .capsLock),
+            .mouseButton(3)
+        )
+    }
+
     func testStandardBareModifierCaptureRecordsPhysicalModifierSide() {
         let candidate = HotkeyRecorderView.bareModifierTrigger(
             for: "command",

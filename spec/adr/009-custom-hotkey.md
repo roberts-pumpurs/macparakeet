@@ -148,3 +148,20 @@ chord that does not require fn still ignores `NX_SECONDARYFNMASK` on its own
 key event. After the chord is down, release-any-part is unchanged: losing a
 required modifier or the trigger key stops push-to-talk, and adding a modifier
 does not. Tap recovery still asks whether the required modifiers remain down.
+
+## Amendment: Native mouse-button shortcuts
+
+The shared recorder accepts bare middle and extra mouse buttons. A new
+`.mouseButton` kind stores a zero-based `mouseButtonNumber`, separate from
+keyboard codes. Mouse 4 stores 3. Valid numbers are 2 through 31; left/right
+clicks and modifier+mouse chords cannot be assigned.
+
+Dictation and auxiliary shortcuts listen for matching `otherMouseDown`,
+`otherMouseUp`, and `otherMouseDragged` events. Assigned buttons replace their
+normal action. Dictation reuses its existing gesture controller and ownership
+rules. Recovery reads `CGEventSource.buttonState`, not keyboard state.
+
+The recorder keeps production taps suspended until the captured button is
+released. Cancel, Escape, and view disappearance discard the candidate without
+leaking its paired release. Existing keyboard settings decode unchanged.
+

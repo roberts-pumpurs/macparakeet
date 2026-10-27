@@ -536,13 +536,14 @@ public enum TelemetryHotkeySurface: String, Sendable, Equatable {
 ///
 /// We deliberately track structural category only — see
 /// `docs/telemetry.md` item 10: "track boolean, not which key." `kind` is
-/// one step up from a boolean (4 categories of binding pattern); it does
-/// not reveal the actual modifier or keycode the user picked.
+/// one step up from a boolean (the binding pattern); it does
+/// not reveal the actual modifier, keycode, or mouse button the user picked.
 public enum TelemetryHotkeyKind: String, Sendable, Equatable {
     case disabled
     case modifier
     case keyCode = "key_code"
     case chord
+    case mouseButton = "mouse_button"
 }
 
 public enum TelemetrySettingName: String, Sendable, Equatable {

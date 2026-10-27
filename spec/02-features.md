@@ -169,6 +169,12 @@ Meeting Recording and Calendar are opt-in and self-prompt on first use (see ADR-
 
 Dictation defaults to a built-in shared `Fn` gesture preset: hold `Fn` for push-to-talk, or double-tap `Fn` for hands-free mode. `Fn+Fn` is not a customizable recorded hotkey; choosing restore default returns to this preset. Each dictation role can still be assigned a custom shortcut. The "record a shortcut" UI supports bare modifiers (Fn, Control, etc.), standalone keys (F5, Tab, etc.), modifier+key chords (Fn+Space, Cmd+9, Ctrl+Shift+D), and modifier-only chords (Command+Option, including side-specific variants like Right Command+Right Option). See ADR-009 for full details. Custom dictation shortcuts may be distinct, or both roles may share the exact same non-disabled trigger to reuse the hold/double-tap gesture model. Settings blocks overlapping but non-identical triggers.
 
+The recorder also accepts bare middle and extra mouse buttons, including
+Mouse 4 and Mouse 5. Press and release the button over the recording window.
+Left and right clicks remain available for normal UI actions. Modifier+mouse
+chords cannot be recorded. Mouse buttons use the same hold, hands-free, and
+shared hold/double-click gestures as keyboard triggers.
+
 Settings > Capture > Dictation > **Additional shortcuts** provides an optional
 second push-to-talk and hands-free shortcut. Both pairs remain active on all
 keyboards. Within either pair, assigning the same trigger enables hold/double-tap
@@ -210,9 +216,10 @@ Legacy default installs using `Fn+Space` hands-free plus `Fn` push-to-talk migra
   and is inherently unobservable; this remains a runtime proof limit. A
   cancelled gesture's later Fn/key release cannot stop, transcribe, paste, or
   submit.
-- `HotkeyTrigger` struct with `.modifier` / `.keyCode` / `.chord` / `.modifierChord` kind discriminator (see ADR-009)
+- `HotkeyTrigger` struct with `.modifier` / `.keyCode` / `.chord` / `.modifierChord` / `.mouseButton` kind discriminator (see ADR-009)
 - Modifier triggers: `flagsChanged` events with `CGEventFlags` mask, bare-tap filtering
 - KeyCode triggers: `keyDown`/`keyUp` events with event swallowing, edge detection via `triggerKeyIsPressed` boolean
+- Mouse triggers consume matching `otherMouseDown`, `otherMouseUp`, and `otherMouseDragged` events. The zero-based `mouseButtonNumber` is separate from keyboard codes. Tap recovery reads physical button state.
 - Modifier+key chord triggers: on `keyDown` of the trigger key, the five relevant modifiers (fn, control, option, shift, command) must match the configured set exactly. Caps Lock and other non-relevant bits stay ignored. A function-family chord that does not itself require fn also ignores the phantom fn bit macOS sets on that key's own event. Extra real modifiers do not fire the chord, and that key is delivered to the front app. The decision belongs to the initial key-down of a press: auto-repeats keep it until key-up, so adding a modifier does not cancel an accepted hold and releasing one cannot start a press that was already rejected. Once the chord is down, hold-to-talk still uses release-any-part: releasing the trigger key or any required modifier stops dictation, and pressing an additional modifier does not. `chordModifierReleased` prevents a second stop when the modifier is released while the trigger key is still held. Tap recovery still treats the chord as held when the trigger key and its required modifiers are down.
 - Modifier-only chord triggers: require an exact set of 2+ chord-eligible modifiers before emitting the same key-agnostic gesture signals as single-key triggers. Generic and side-specific variants are persisted distinctly, and overlap checks block ambiguous assignments.
 - Edge detection: only fire on actual transitions of the target key state
@@ -391,7 +398,7 @@ Space is always reserved for the tooltip (opacity toggle, not conditional render
 **Acceptance criteria:**
 - [x] Hands-free shortcut activates persistent recording from any app
 - [x] Hold shortcut activates hold-mode, release auto-stops and pastes
-- [x] Hotkey trigger configurable to bare modifiers, standalone keys, modifier+key chords, and modifier-only chords via record-a-shortcut UI; Fn+Space is supported and Escape remains reserved
+- [x] The recorder accepts bare modifiers, standalone keys, modifier+key chords, modifier-only chords, and bare middle/extra mouse buttons. Fn+Space is supported and Escape remains reserved.
 - [x] Overlay appears at bottom-center with waveform animation
 - [x] Optional display-only live transcript preview renders above the pill while speaking, decoupled from the paste (`liveDictationStreamingEnabled`, `main`-only)
 - [x] Hover tooltips display correctly on non-activating panel
@@ -836,8 +843,8 @@ Audio path is computed from ID by default. Files stored as WAV (16kHz mono). Use
 | Launch at login | On / Off | Off |
 | Hide menu bar icon | On / Off; enabling it turns off Menu bar only mode and leaves the Dock available | Off |
 | Menu bar only mode | On / Off; enabling it turns off Hide menu bar icon and restores the menu bar icon; a persisted conflict is repaired on launch by restoring the icon | Off |
-| Push-to-talk hotkey | Bare modifiers, standalone keys, modifier+key chords, and modifier-only chords with overlap checks | Fn |
-| Hands-free hotkey | Default shared Fn gesture preset; custom bare modifiers, standalone keys, modifier+key chords, and modifier-only chords; may exactly match push-to-talk for shared gesture behavior | Fn |
+| Push-to-talk hotkey | Bare modifiers, standalone keys, modifier+key chords, modifier-only chords, and bare middle/extra mouse buttons with overlap checks | Fn |
+| Hands-free hotkey | Default shared Fn gesture preset; custom keyboard or bare middle/extra mouse triggers; may exactly match push-to-talk for shared gestures | Fn |
 | Stop mode | Auto-stop after silence / Manual | Manual |
 | Silence delay | 1s, 1.5s, 2s, 3s, 5s | 2s |
 | Save audio recordings | On / Off | On |
@@ -851,7 +858,7 @@ Audio path is computed from ID by default. Files stored as WAV (16kHz mono). Use
 
 **Acceptance criteria:**
 - [x] All settings persist across app restarts (UserDefaults or GRDB)
-- [x] Hotkey can be changed to bare modifiers, standalone keys, modifier+key chords, and modifier-only chords via record-a-shortcut UI; Command chords warn on common system conflicts
+- [x] The recorder accepts keyboard shortcuts and bare middle/extra mouse buttons. Command chords warn on common system conflicts.
 - [x] Stop mode switch works correctly for both modes
 - [x] Storage controls whether dictation audio is saved
 - [x] Meeting audio retention keeps transcripts while allowing audio to be kept forever, deleted after N days, or deleted after transcription

@@ -1,9 +1,9 @@
 import Foundation
 
-/// A hotkey trigger that supports both modifier keys and regular key codes.
+/// A hotkey trigger supporting modifier keys, regular key codes, and other mouse buttons.
 /// Replaces the old `TriggerKey` enum with an extensible struct.
 ///
-/// Only canonical identity (kind + modifierName/keyCode/modifierKeyCode) is persisted.
+/// Only canonical identity (kind + keyboard or mouse identity) is persisted.
 /// Display names are derived at runtime from `KeyCodeNames` / modifier lookup.
 public struct HotkeyTrigger: Sendable {
 
@@ -15,9 +15,10 @@ public struct HotkeyTrigger: Sendable {
         case keyCode
         case chord
         case modifierChord
+        case mouseButton
     }
 
-    public struct ModifierComponent: Codable, Equatable, Sendable {
+    public struct ModifierComponent: Codable, Equatable, Hashable, Sendable {
         public let modifierName: String
         public let keyCode: UInt16?
 
@@ -54,6 +55,8 @@ public struct HotkeyTrigger: Sendable {
     public let modifierKeyCode: UInt16?
     /// Modifier components for `.modifierChord` kind. Nil for other kinds.
     public let modifierChordComponents: [ModifierComponent]?
+    /// Zero-based macOS button number for `.mouseButton` kind (Mouse 4 = 3).
+    public let mouseButtonNumber: UInt16?
 
     // MARK: - Computed Properties (derived at runtime)
 
@@ -84,6 +87,9 @@ public struct HotkeyTrigger: Sendable {
             let modifierNames = Self.sortedModifierComponentDisplayNames(modifierChordComponents)
             if modifierNames.isEmpty { return "Unknown" }
             return modifierNames.joined(separator: "+")
+        case .mouseButton:
+            guard let number = mouseButtonNumber else { return "Unknown" }
+            return "Mouse \(Int(number) + 1)"
         }
     }
 
@@ -107,7 +113,7 @@ public struct HotkeyTrigger: Sendable {
             let name = displayName
             if glyph == name { return name }
             return "\(glyph) \(name)"
-        case .keyCode, .chord, .modifierChord:
+        case .keyCode, .chord, .modifierChord, .mouseButton:
             // Glyph form matches macOS menu/keyboard conventions
             // (e.g. "↑", "F13", "⇧⌘N").
             return shortSymbol
@@ -140,6 +146,8 @@ public struct HotkeyTrigger: Sendable {
         case .modifierChord:
             let modifierPart = Self.sortedModifierComponentSymbols(modifierChordComponents)
             return modifierPart.isEmpty ? "?" : modifierPart
+        case .mouseButton:
+            return displayName
         }
     }
 
@@ -356,7 +364,8 @@ public struct HotkeyTrigger: Sendable {
         keyCode: UInt16?,
         chordModifiers: [String]? = nil,
         modifierKeyCode: UInt16? = nil,
-        modifierChordComponents: [ModifierComponent]? = nil
+        modifierChordComponents: [ModifierComponent]? = nil,
+        mouseButtonNumber: UInt16? = nil
     ) {
         self.kind = kind
         self.modifierName = modifierName
@@ -364,6 +373,7 @@ public struct HotkeyTrigger: Sendable {
         self.chordModifiers = chordModifiers
         self.modifierKeyCode = modifierKeyCode
         self.modifierChordComponents = modifierChordComponents.map { Self.normalizedModifierComponents($0) }
+        self.mouseButtonNumber = mouseButtonNumber
     }
 
     // MARK: - Disabled Preset
@@ -407,6 +417,11 @@ public struct HotkeyTrigger: Sendable {
     /// Create a trigger from a CGKeyCode.
     public static func fromKeyCode(_ code: UInt16) -> HotkeyTrigger {
         HotkeyTrigger(kind: .keyCode, modifierName: nil, keyCode: code)
+    }
+
+    /// Create a bare other-mouse trigger. Assignable macOS button numbers are 2...31.
+    public static func mouseButton(_ buttonNumber: UInt16) -> HotkeyTrigger {
+        HotkeyTrigger(kind: .mouseButton, modifierName: nil, keyCode: nil, mouseButtonNumber: buttonNumber)
     }
 
     /// Create a chord trigger from modifier names and a CGKeyCode (e.g., `chord(modifiers: ["command"], keyCode: 25)` for Cmd+9).
@@ -470,6 +485,15 @@ public struct HotkeyTrigger: Sendable {
             return Self.validateChord(keyCode: keyCode, modifiers: chordModifiers)
         case .modifierChord:
             return Self.validateModifierChord(modifierChordComponents)
+        case .mouseButton:
+            guard let number = mouseButtonNumber, (2...31).contains(number) else {
+                return .blocked("Choose a mouse button from Mouse 3 through Mouse 32.")
+            }
+            guard modifierName == nil, keyCode == nil, chordModifiers == nil,
+                  modifierKeyCode == nil, modifierChordComponents == nil else {
+                return .blocked("Mouse shortcuts must use a mouse button without modifiers.")
+            }
+            return .allowed
         }
     }
 
@@ -782,6 +806,7 @@ extension HotkeyTrigger {
         case .keyCode:  return .keyCode
         case .chord:    return .chord
         case .modifierChord: return .chord
+        case .mouseButton: return .mouseButton
         }
     }
 
@@ -800,14 +825,17 @@ extension HotkeyTrigger: Equatable {
             && lhs.keyCode == rhs.keyCode && lhs.chordModifiers == rhs.chordModifiers
             && lhs.modifierKeyCode == rhs.modifierKeyCode
             && lhs.modifierChordComponents == rhs.modifierChordComponents
+            && lhs.mouseButtonNumber == rhs.mouseButtonNumber
     }
 }
+
+extension HotkeyTrigger: Hashable {}
 
 // MARK: - Codable (canonical identity only — no displayName/shortSymbol)
 
 extension HotkeyTrigger: Codable {
     private enum CodingKeys: String, CodingKey {
-        case kind, modifierName, keyCode, chordModifiers, modifierKeyCode, modifierChordComponents
+        case kind, modifierName, keyCode, chordModifiers, modifierKeyCode, modifierChordComponents, mouseButtonNumber
     }
 
     public init(from decoder: Decoder) throws {
@@ -822,9 +850,20 @@ extension HotkeyTrigger: Codable {
             forKey: .modifierChordComponents
         )
         modifierChordComponents = components.map { Self.normalizedModifierComponents($0) }
+        mouseButtonNumber = try container.decodeIfPresent(UInt16.self, forKey: .mouseButtonNumber)
+        if kind == .mouseButton, case .blocked(let reason) = validation {
+            throw DecodingError.dataCorruptedError(
+                forKey: .mouseButtonNumber,
+                in: container,
+                debugDescription: reason
+            )
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
+        if kind == .mouseButton, case .blocked(let reason) = validation {
+            throw EncodingError.invalidValue(self, .init(codingPath: encoder.codingPath, debugDescription: reason))
+        }
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(kind, forKey: .kind)
         try container.encodeIfPresent(modifierName, forKey: .modifierName)
@@ -832,5 +871,6 @@ extension HotkeyTrigger: Codable {
         try container.encodeIfPresent(chordModifiers, forKey: .chordModifiers)
         try container.encodeIfPresent(modifierKeyCode, forKey: .modifierKeyCode)
         try container.encodeIfPresent(modifierChordComponents, forKey: .modifierChordComponents)
+        try container.encodeIfPresent(mouseButtonNumber, forKey: .mouseButtonNumber)
     }
 }

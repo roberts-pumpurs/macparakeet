@@ -5,8 +5,8 @@ import MacParakeetCore
 import OSLog
 
 /// Manages system-wide hotkey detection via CGEvent tap.
-/// Supports any single key as trigger: modifier keys (Fn, Control, Option, Shift, Command)
-/// or regular key codes (F13, End, Home, etc.). See ADR-009.
+/// Supports modifier keys, regular keys, chords, and middle/extra mouse buttons.
+/// Each trigger uses the same dictation gesture controller. See ADR-009.
 /// Requires Accessibility permission.
 public final class HotkeyManager {
     private static let logger = Logger(subsystem: "com.macparakeet.app", category: "HotkeyManager")
@@ -150,6 +150,12 @@ public final class HotkeyManager {
         if trigger == .fn || trigger.kind == .keyCode || trigger.kind == .chord || peerInput.claimsKeys {
             mask |= (1 << CGEventType.keyUp.rawValue)
         }
+        if trigger.kind == .mouseButton {
+            mask |= (1 << CGEventType.otherMouseDown.rawValue)
+                | (1 << CGEventType.otherMouseUp.rawValue)
+                | (1 << CGEventType.otherMouseDragged.rawValue)
+                | (1 << CGEventType.keyUp.rawValue)
+        }
         return mask
     }
 
@@ -251,6 +257,8 @@ public final class HotkeyManager {
             handleChordEvent(event)
         case .modifierChord:
             handleModifierChordEvent(event)
+        case .mouseButton:
+            handleMouseButtonEvent(event)
         }
     }
 
@@ -551,13 +559,20 @@ public final class HotkeyManager {
 
     /// Runs one physical event through the same path as a live tap, callbacks
     /// included. Timers armed by the event are left to the caller's seams.
-    func processForTesting(type: CGEventType, keyCode: UInt16, flags: CGEventFlags, timestampMs: UInt64) {
+    func processForTesting(
+        type: CGEventType,
+        keyCode: UInt16,
+        flags: CGEventFlags,
+        timestampMs: UInt64,
+        mouseButtonNumber: UInt16? = nil
+    ) {
         process(
             KeyEventSnapshot(
                 type: type,
                 keyCode: Int64(keyCode),
                 flags: flags,
-                timestamp: timestampMs * 1_000_000
+                timestamp: timestampMs * 1_000_000,
+                mouseButtonNumber: mouseButtonNumber.map(Int64.init)
             )
         )
     }
@@ -668,6 +683,34 @@ public final class HotkeyManager {
         let outputs = modifierChordKeyDownOutputs(keyCode: keyCode, flags: flags, timestampMs: timestampMs)
         rememberRecordingState(for: outputs)
         return outputs
+    }
+
+    // MARK: - Mouse Button Trigger Path
+
+    private func handleMouseButtonEvent(_ event: KeyEventSnapshot) {
+        let timestampMs = UInt64(event.timestamp / 1_000_000)
+        switch event.type {
+        case .otherMouseDown:
+            guard event.mouseButtonNumber == trigger.mouseButtonNumber.map(Int64.init),
+                  !triggerKeyIsPressed else { return }
+            triggerKeyIsPressed = true
+            handleOutputs(gestureController.triggerPressed(timestampMs: timestampMs))
+        case .otherMouseUp:
+            guard event.mouseButtonNumber == trigger.mouseButtonNumber.map(Int64.init),
+                  triggerKeyIsPressed else { return }
+            triggerKeyIsPressed = false
+            handleOutputs(gestureController.triggerReleased(timestampMs: timestampMs))
+        case .keyDown:
+            if event.keyCode == 53 {
+                handleOutputs(escapeOutputs())
+            } else if !claimPeerKeyDown(UInt16(event.keyCode), flags: event.flags.rawValue) {
+                handleOutputs(gestureController.interrupted())
+            }
+        case .keyUp:
+            releasePeerKey(UInt16(event.keyCode))
+        default:
+            break
+        }
     }
 
     // MARK: - KeyCode Trigger Path
@@ -1167,7 +1210,7 @@ public final class HotkeyManager {
                 )
             }
             return ModifierKeyMatcher.modifierIsPressed(trigger: trigger, flags: currentFlags)
-        case .keyCode:
+        case .keyCode, .mouseButton:
             return triggerKeyPressed
         case .chord:
             guard triggerKeyPressed else { return false }
@@ -1313,6 +1356,10 @@ public final class HotkeyManager {
     }
 
     fileprivate static func physicalTriggerKeyIsPressed(_ trigger: HotkeyTrigger) -> Bool {
+        if trigger.kind == .mouseButton, let button = trigger.mouseButtonNumber,
+           let mouseButton = CGMouseButton(rawValue: UInt32(button)) {
+            return CGEventSource.buttonState(.combinedSessionState, button: mouseButton)
+        }
         guard trigger.kind == .keyCode || trigger.kind == .chord,
               let keyCode = trigger.keyCode else {
             return false
@@ -1520,28 +1567,38 @@ public final class HotkeyManager {
     }
 }
 
-/// A keyboard event copied out of the tap callback so the main thread can
-/// process it after the callback has returned.
+/// An input event copied out of the tap callback so the main thread can
+/// process it after the callback has returned. Mouse numbers never become key codes.
 struct KeyEventSnapshot: Sendable {
     let type: CGEventType
     let keyCode: Int64
     let flags: CGEventFlags
     let timestamp: CGEventTimestamp
+    let mouseButtonNumber: Int64?
 
     init(type: CGEventType, event: CGEvent) {
         self.init(
             type: type,
             keyCode: event.getIntegerValueField(.keyboardEventKeycode),
             flags: event.flags,
-            timestamp: event.timestamp
+            timestamp: event.timestamp,
+            mouseButtonNumber: type == .otherMouseDown || type == .otherMouseUp || type == .otherMouseDragged
+                ? event.getIntegerValueField(.mouseEventButtonNumber) : nil
         )
     }
 
-    init(type: CGEventType, keyCode: Int64, flags: CGEventFlags, timestamp: CGEventTimestamp) {
+    init(
+        type: CGEventType,
+        keyCode: Int64,
+        flags: CGEventFlags,
+        timestamp: CGEventTimestamp,
+        mouseButtonNumber: Int64? = nil
+    ) {
         self.type = type
         self.keyCode = keyCode
         self.flags = flags
         self.timestamp = timestamp
+        self.mouseButtonNumber = mouseButtonNumber
     }
 }
 
@@ -1582,7 +1639,8 @@ private final class HotkeyTapRelay: @unchecked Sendable {
         let shouldSwallow = filter.shouldSwallow(
             type: type,
             keyCode: UInt16(truncatingIfNeeded: snapshot.keyCode),
-            flags: snapshot.flags.rawValue
+            flags: snapshot.flags.rawValue,
+            mouseButtonNumber: snapshot.mouseButtonNumber.map { UInt16(truncatingIfNeeded: $0) }
         )
         forward(.key(snapshot))
         return shouldSwallow ? nil : Unmanaged.passUnretained(event)

@@ -56,6 +56,25 @@ and that one shortcut's use never silently ends another's take.
 - A change to either slot uses the existing role notification to refresh the
   shortcuts, menu hints, and Transform reservations.
 
+### Mouse triggers
+
+- Bare middle and extra buttons use `{"kind":"mouseButton","mouseButtonNumber":3}`
+  for Mouse 4. macOS numbers buttons from zero; the UI labels them from one.
+  Valid stored numbers are 2 through 31. Left/right clicks and mouse triggers
+  with keyboard or modifier identity fields are invalid.
+- Existing keyboard JSON and defaults keys do not change. Mouse numbers and
+  keyboard codes have separate identities, even when their numbers match.
+- The recorder consumes the chosen button's down, drag, and up events. It
+  saves on release and resumes production taps afterward. Cancel, Escape, and
+  view disappearance discard the candidate but still drain its release.
+- Runtime taps consume only the assigned button's down, drag, and up events.
+  Other buttons retain their normal actions. The assigned button reuses the
+  existing hold, hands-free, and shared hold/double-click gestures.
+- A mouse-held take stops only on its own button's release. Tap recovery reads
+  physical mouse-button state, so a missed release stops the held take.
+- Same-button assignments use the existing pair conflict rules. A mouse
+  shortcut does not reserve a keyboard code with the same numeric value.
+
 ### Collision semantics
 
 - Within each pair, identical enabled triggers create one combined manager:
@@ -176,6 +195,13 @@ keyboard, assign Delete to both additional roles, exercise hold/release and
 double-tap/stop on both keyboards, stop a hands-free take from the other
 keyboard, and verify that pressing and releasing the other shortcut cannot end a
 held take. Test disable/relaunch and conflict recording.
+
+Mouse acceptance: record Mouse 4 in Settings, verify the label and persistence,
+then exercise hold/release and hands-free click-to-toggle through a live event
+tap. Release Mouse 5 during a Mouse 4 hold and verify the take remains held.
+Cancel or leave Settings while capturing a held button and verify that the
+candidate is discarded and taps resume only after release. Physical-device
+delivery and speech-to-paste still require a check with the user's mouse.
 
 ## When this contract changes
 

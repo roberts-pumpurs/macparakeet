@@ -25,7 +25,7 @@ struct HotkeyPeerInputPolicy: Equatable {
         var keyTriggers: [HotkeyTrigger] = []
         for peer in peers {
             switch peer.kind {
-            case .disabled:
+            case .disabled, .mouseButton:
                 break
             case .modifier:
                 if let name = peer.modifierName {
